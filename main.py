@@ -1,12 +1,16 @@
+import os
 import wandb
 import time
 from utils.alert import send_discord_message
+from dotenv import load_dotenv
 
+
+load_dotenv()
 
 PROJECT_NAME = 'sportstensor-vali-logs' # sportstensor wandb
 ENTITY_NAME = 'sportstensor'
 
-wandb.login(key='562691369158ea349551cc596f75748548a8f6e0')
+wandb.login(key=os.getenv('WANDB_API_KEY'))
 
 def get_wandb_runs(project, entity):
     """Fetch all active and past runs from the specified wandb project"""
@@ -56,11 +60,14 @@ def monitor_wandb_logs(project, entity, webhook_url, interval=60):
     """
     runs = get_wandb_runs(project, entity)
     running_runs = check_running(runs)
+    print(f"{len(running_runs)} running validators found.")
+
+    # send initial info about running validators
     message = "**Running validators**\n"
     for run in running_runs:
         message += f"- [{run['user']}: ({run['hotkey']})](<{run['url']}>)\n"
     send_discord_message(webhook_url, message)
-    print(f"{len(running_runs)} running validators found.")
+
     print("Start monitoring validators on wandb...")
     while True:
         try:
@@ -76,7 +83,8 @@ def monitor_wandb_logs(project, entity, webhook_url, interval=60):
 
                         with open(log_file.name, "r") as file:
                             log_lines = file.readlines()
-
+                        
+                        # get the last 100 lines of logs and check for errors
                         last_n_lines = log_lines[-100:]
                         has_error = any("error" in line.lower() for line in last_n_lines)
                         has_exception = any("exception" in line.lower() for line in last_n_lines)
@@ -94,16 +102,17 @@ def monitor_wandb_logs(project, entity, webhook_url, interval=60):
                             print("No errors found.")
                     runs = get_wandb_runs(project, entity)
                     running_runs = check_running(runs)
+
             print("Waiting for 60 seconds...")
             time.sleep(interval)
+            
         except Exception as e:
             print(f"Error: {e}")
             continue
 
 
 if __name__ == '__main__':
-    webhook_url = 'https://discord.com/api/webhooks/1300133020078047343/qHEtaJocmzTXFEIbhbDg5OK7sBnZIxpFZvUgTE3KyflWa1m7NexkdkSE_Ic15Mqx3v7m' # sportstensor
-    # webhook_url = 'https://discord.com/api/webhooks/1289210526294872064/JFW_8tLxzP7U3CBhx0YpoV84Uu7ry8CyoWWtbKj37Um42UUDSlSmtBAO1KiBfWksRMEt' # unihub
+    webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
 
+    # start monitoring wandb logs
     monitor_wandb_logs(PROJECT_NAME, ENTITY_NAME, webhook_url, interval=60)
-    # send_discord_message(webhook_url, message)
