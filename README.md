@@ -20,10 +20,10 @@ pip install -r requirements.txt
     ```
 
 ## Configuration
-Copy the `.env.sample` file to `.env` and store the `webhook_url` there.
+Copy the `.env.example` file to `.env` and store the `WANDB_API_KEY` and `DISCORD_WEBHOOK_URL` of discord channel there.
 ```yaml
-api_key=YOUR_WANDB_API_KEY 
-webhook_url=YOUR_DISCORD_WEBHOOK_URL
+WANDB_API_KEY=YOUR_WANDB_API_KEY 
+DISCORD_WEBHOOK_URL=YOUR_DISCORD_WEBHOOK_URL
 ```
 
 ## Contributing
