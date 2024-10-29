@@ -44,10 +44,10 @@ def check_crashes(runs, webhook_url):
             if message:
                 send_discord_message(webhook_url, f"Validator [`{run.user.username}`](<{run.url}>) {run.state} at `{stopped_at}`.\n```python\n{message}\n```")
             else:
-                print("No errors found.")
+                send_discord_message(webhook_url, f"Validator [`{run.user.username}`](<{run.url}>) {run.state} at `{stopped_at}`. No exceptions found in the logs.")
         elif run.state == 'crashed' or run.state == 'failed':
             is_stopped = True
-            send_discord_message(webhook_url, f"Validator [`{run.user}`](<{run.url}>) {run.state} at `{stopped_at}`.")
+            send_discord_message(webhook_url, f"Validator [`{run.user.username}`](<{run.url}>) {run.state} at `{stopped_at}`.")
 
     return is_stopped
 
