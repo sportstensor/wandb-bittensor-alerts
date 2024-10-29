@@ -3,6 +3,7 @@ import wandb
 import time
 from utils.alert import send_discord_message
 from dotenv import load_dotenv
+import datetime as dt
 
 
 load_dotenv()
@@ -18,23 +19,37 @@ def get_wandb_runs(project, entity):
     runs = api.runs(f"{entity}/{project}")
     return runs
 
-def check_crashes(runs):
+def check_crashes(runs, webhook_url):
     """Check if any of the runs have crashed or failed"""
-    crashed_runs = []
+    is_stopped = False
+    stopped_at = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     for run_lite in runs:
         run = wandb.Api().run(f"{ENTITY_NAME}/{PROJECT_NAME}/{run_lite['id']}")
-        if run.state == 'failed' or run.state == 'crashed' or run.state == 'finished':
-            send_discord_message(webhook_url, f"Validator {run.user.username}({run.config['hotkey']}) stopped with state: {run.state}. Check the logs [here](<{run.url}>).")
-            crashed_runs.append({
-                'name': run.name,
-                'id': run.id,
-                'state': run.state,
-                'url': run.url,
-                'hotkey': run.config['hotkey'],
-                'created_at': run.createdAt,
-                'user': run.user.username
-            })
-    return crashed_runs
+        if run.state == 'finished':
+            is_stopped = True
+            log_file = run.file('output.log').download(replace=True)
+
+            with open(log_file.name, "r") as file:
+                log_lines = file.readlines()
+            
+            # get the last 100 lines of logs and check for errors
+            last_n_lines = log_lines[-100:]
+            message = None
+            for line in last_n_lines:
+                if "KeyboardInterrupt" in line.lower():
+                    message = f"Exception: KeyboardInterrupt"
+                elif "exception" in line.lower() or "error" in line.lower():
+                    message = line
+
+            if message:
+                send_discord_message(webhook_url, f"Validator `{run.user}` {run.state} at {stopped_at}.\n```python\n{message}\n```")
+            else:
+                print("No errors found.")
+        elif run.state == 'crashed' or run.state == 'failed':
+            is_stopped = True
+            send_discord_message(webhook_url, f"Validator `{run.user}` {run.state} at {stopped_at}.")
+
+    return is_stopped
 
 def check_running(runs):
     """Check if any of the runs are still running"""
@@ -53,59 +68,40 @@ def check_running(runs):
             })
     return running_runs
 
+def sync_running_runs(project, entity):
+    """Sync the wandb runs with the local directory"""
+    runs = get_wandb_runs(project, entity)
+    running_runs = check_running(runs)
+
+    return running_runs
+
+
 def monitor_wandb_logs(project, entity, webhook_url, interval=60):
     """
         Continuously monitor wandb logs, save the runs in a list and check for crashes.
         If any crashes are found, check the latest lines of logs and if there's exception, send a message to the sportstensor discord channel (#wandb-alerts).
     """
-    runs = get_wandb_runs(project, entity)
-    running_runs = check_running(runs)
+    running_runs = sync_running_runs(project, entity)
     print(f"{len(running_runs)} running validators found.")
 
     # send initial info about running validators
-    message = "**Running validators**\n"
-    for run in running_runs:
-        message += f"- [{run['user']}: ({run['hotkey']})](<{run['url']}>)\n"
-    send_discord_message(webhook_url, message)
+    # message = "**Running validators**\n"
+    # for run in running_runs:
+    #     message += f"- [{run['user']}: ({run['hotkey']})](<{run['url']}>)\n"
+    # send_discord_message(webhook_url, message)
 
     print("Start monitoring validators on wandb...")
     while True:
         try:
             print("Checking for crashed validators...")
-            crashed_runs = check_crashes(running_runs)
-            if len(crashed_runs) == 0:
-                print("No crashed validators found.")
-            else:
-                for run in crashed_runs:
-                    if run['state'] == 'finished':
-                        run_log = wandb.Api().run(f"{entity}/{project}/{run['id']}")
-                        log_file = run_log.file('output.log').download(replace=True)
+            is_stopped = check_crashes(running_runs, webhook_url)
 
-                        with open(log_file.name, "r") as file:
-                            log_lines = file.readlines()
-                        
-                        # get the last 100 lines of logs and check for errors
-                        last_n_lines = log_lines[-100:]
-                        has_error = any("error" in line.lower() for line in last_n_lines)
-                        has_exception = any("exception" in line.lower() for line in last_n_lines)
-
-                        print("Last N lines of logs:")
-                        print("".join(last_n_lines))
-
-                        if has_error:
-                            print("Error found in the logs!")
-                            send_discord_message(webhook_url, f"Error found in the logs of {run['user']}({run['hotkey']}).")
-                        elif has_exception:
-                            print("Exception found in the logs!")
-                            send_discord_message(webhook_url, f"Exception found in the logs of {run['user']}({run['hotkey']}).")
-                        else:
-                            print("No errors found.")
-                    runs = get_wandb_runs(project, entity)
-                    running_runs = check_running(runs)
+            if is_stopped:
+                running_runs = sync_running_runs(project, entity)
 
             print("Waiting for 60 seconds...")
             time.sleep(interval)
-            
+
         except Exception as e:
             print(f"Error: {e}")
             continue
