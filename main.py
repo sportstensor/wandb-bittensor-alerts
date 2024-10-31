@@ -11,6 +11,10 @@ load_dotenv()
 PROJECT_NAME = 'sportstensor-vali-logs' # sportstensor wandb
 ENTITY_NAME = 'sportstensor'
 
+EXCLUDED_VALIDATORS = [
+    'xjp',
+]
+
 wandb.login(key=os.getenv('WANDB_API_KEY'))
 
 def get_wandb_runs(project, entity):
@@ -19,14 +23,13 @@ def get_wandb_runs(project, entity):
     runs = api.runs(f"{entity}/{project}")
     return runs
 
-def check_crashes(runs, webhook_url):
+def check_stoppings(runs, webhook_url):
     """Check if any of the runs have crashed or failed"""
-    is_stopped = False
+    stopped_runs = []
     stopped_at = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     for run_lite in runs:
         run = wandb.Api().run(f"{ENTITY_NAME}/{PROJECT_NAME}/{run_lite['id']}")
         if run.state == 'finished':
-            is_stopped = True
             log_file = run.file('output.log').download(replace=True)
 
             with open(log_file.name, "r") as file:
@@ -36,26 +39,50 @@ def check_crashes(runs, webhook_url):
             last_n_lines = log_lines[-100:]
             message = None
             for line in last_n_lines:
-                if "KeyboardInterrupt" in line.lower():
+                if "KeyboardInterrupt" in line.lower() or "ctrl+c" in line.lower() or "keyboard interrupt" in line.lower():
                     message = f"Exception: KeyboardInterrupt"
                 elif "exception" in line.lower() or "error" in line.lower():
                     message = line
+
+            stopped_runs.append({
+                'name': run.name,
+                'id': run.id,
+                'state': run.state,
+                'url': run.url,
+                'hotkey': run.config['hotkey'],
+                'created_at': run.createdAt,
+                'user': run.user.username,
+            })
 
             if message:
                 send_discord_message(webhook_url, f"Validator [`{run.user.username}`](<{run.url}>) {run.state} at `{stopped_at}`.\n```python\n{message}\n```")
             else:
                 send_discord_message(webhook_url, f"Validator [`{run.user.username}`](<{run.url}>) {run.state} at `{stopped_at}`. No exceptions found in the logs.")
         elif run.state == 'crashed' or run.state == 'failed':
-            is_stopped = True
+            stopped_runs.append({
+                'name': run.name,
+                'id': run.id,
+                'state': run.state,
+                'url': run.url,
+                'hotkey': run.config['hotkey'],
+                'created_at': run.createdAt,
+                'user': run.user.username,
+            })
             send_discord_message(webhook_url, f"Validator [`{run.user.username}`](<{run.url}>) {run.state} at `{stopped_at}`.")
 
-    return is_stopped
+    return stopped_runs
 
-def check_running(runs):
+def check_running(runs, stopped_runs=[], webhook_url=None):
     """Check if any of the runs are still running"""
     running_runs = []
+    stopped_users = []
+    restarted_at = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if stopped_runs:
+        stopped_users = [run['user'] for run in stopped_runs]
     for run in runs:
         # print(run.__dict__)
+        if run.user.username in EXCLUDED_VALIDATORS:
+            continue
         if run.state == 'running':
             running_runs.append({
                 'name': run.name,
@@ -66,12 +93,14 @@ def check_running(runs):
                 'created_at': run.createdAt,
                 'user': run.user.username
             })
+            if stopped_users and run.user.username in stopped_users:
+                send_discord_message(webhook_url, f"Validator [`{run.user.username}`](<{run.url}>) restarted at `{restarted_at}`.")
     return running_runs
 
-def sync_running_runs(project, entity):
+def sync_running_runs(project, entity, stopped_runs=[], webhook_url=None):
     """Sync the wandb runs with the local directory"""
     runs = get_wandb_runs(project, entity)
-    running_runs = check_running(runs)
+    running_runs = check_running(runs, stopped_runs, webhook_url)
 
     return running_runs
 
@@ -94,10 +123,10 @@ def monitor_wandb_logs(project, entity, webhook_url, interval=60):
     while True:
         try:
             print("Checking for crashed validators...")
-            is_stopped = check_crashes(running_runs, webhook_url)
+            stopped_runs = check_stoppings(running_runs, webhook_url)
 
-            if is_stopped:
-                running_runs = sync_running_runs(project, entity)
+            if stopped_runs:
+                running_runs = sync_running_runs(project, entity, stopped_runs, webhook_url)
 
             print("Waiting for 60 seconds...")
             time.sleep(interval)
